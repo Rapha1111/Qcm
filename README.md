@@ -31,18 +31,21 @@ time_limit, status` (`upcoming` / `open` / `closed`). Docs interactives : `/docs
 ## Bot Discord (multi-utilisateurs)
 
 Chaque utilisateur configure son propre compte, il n'y a pas de limite au nombre d'utilisateurs.
+Le bot n'a jamais besoin de ton mot de passe : il utilise un **token Moodle**, ce qui marche aussi
+quand on se connecte à Moodle via un service tiers (SSO, CAS, Microsoft…).
 
-- `/config` ouvre un formulaire privé (URL de ton Moodle, identifiant, mot de passe). Les identifiants sont
-  vérifiés puis enregistrés, et **le salon où la commande est lancée devient ton salon d'alertes**
-  (relancer `/config` ailleurs le change).
-- `/stop` supprime tes identifiants et arrête les alertes.
+- `/aide` explique comment récupérer ton token.
+- `/config` ouvre un formulaire privé (URL de ton Moodle + token). Le token est vérifié puis
+  enregistré, et **le salon où la commande est lancée devient ton salon d'alertes** (relancer
+  `/config` ailleurs le change).
+- `/stop` supprime ton token et arrête les alertes.
 
-Toutes les `POLL_MINUTES` (10 par défaut), le bot vérifie le Moodle de chacun et poste, en te
-mentionnant, un embed (nom du QCM, matière, fermeture) avec un bouton « Résoudre le QCM » pour
-chaque QCM **noté, présent dans le calendrier et ouvert** non encore signalé. Un QCM annoncé à
-l'avance est notifié à son ouverture. À la première configuration, les QCM existants sont
-mémorisés sans notification. Si les identifiants cessent de fonctionner, les alertes sont
-suspendues et le bot te le dit dans ton salon.
+Toutes les `POLL_MINUTES` (10 par défaut), le bot vérifie le Moodle de chacun. Pour chaque QCM
+**noté et présent dans le calendrier**, il poste, en te mentionnant, un embed (nom, matière,
+fermeture) avec un bouton « Résoudre le QCM » **au moment où le QCM s'ouvre** (au plus
+`POLL_MINUTES` après l'heure d'ouverture). Les QCM déjà ouverts quand tu te connectes, ou
+découverts bien après leur ouverture, ne déclenchent pas d'alerte. Si le token cesse de
+fonctionner, les alertes sont suspendues et le bot te le dit dans ton salon.
 
 ### Installation
 1. Crée une application + un bot sur le portail développeur Discord, invite-le avec le scope
@@ -51,5 +54,5 @@ suspendues et le bot te le dit dans ton salon.
    (`MOODLE_URL` est facultatif : il pré-remplit l'URL dans `/config`.)
 3. `python -m bot.main`
 
-Les mots de passe sont chiffrés (Fernet) dans `qcm.db`. **Sauvegarde `ENCRYPTION_KEY`** : sans
-elle, les identifiants enregistrés sont illisibles et chacun devra refaire `/config`.
+Les tokens sont chiffrés (Fernet) dans `qcm.db`. **Sauvegarde `ENCRYPTION_KEY`** : sans elle, les
+tokens enregistrés sont illisibles et chacun devra refaire `/config`.

@@ -1,10 +1,30 @@
 """Client minimal pour l'API de services web de Moodle."""
 from __future__ import annotations
 
+import base64
+import re
 import time
 from dataclasses import dataclass
 
 import httpx
+
+
+def parse_token(raw: str) -> str:
+    """Extrait un token Moodle de ce que l'utilisateur a collé : le token brut (32 hexadécimaux),
+    ou le lien `moodlemobile://token=<base64>` renvoyé par la connexion mobile (SSO)."""
+    raw = raw.strip().strip("\"'")
+    if "token=" in raw:
+        raw = raw.split("token=", 1)[1]
+    if re.fullmatch(r"[0-9a-fA-F]{32}", raw):
+        return raw.lower()
+    try:
+        decoded = base64.b64decode(raw + "=" * (-len(raw) % 4)).decode()
+        parts = decoded.split(":::")
+        if len(parts) >= 2 and re.fullmatch(r"[0-9a-fA-F]{32}", parts[1]):
+            return parts[1].lower()
+    except Exception:
+        pass
+    raise ValueError("Token Moodle non reconnu")
 
 
 class MoodleError(Exception):
@@ -105,6 +125,10 @@ class MoodleClient:
             if len(events) < 50:
                 return ids
             after = res["lastid"]
+
+    def site_info(self, token: str) -> dict:
+        """Infos du compte lié au token (lève MoodleAuthError si le token est invalide)."""
+        return self._call(token, "core_webservice_get_site_info")
 
     def get_quizzes(self, token: str) -> list[Quiz]:
         """QCM notés (note max > 0) présents dans le calendrier."""
