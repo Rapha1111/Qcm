@@ -94,12 +94,14 @@ class ConfigModal(discord.ui.Modal, title="Connexion à Moodle"):
 
 HELP = (
     "**Récupérer ton token Moodle**\n"
-    "**Méthode 1** : sur ton Moodle, ouvre *Préférences → Sécurité → Clés de sécurité* "
-    "(`/user/managetoken.php`) et copie la clé « Moodle mobile web service ».\n"
-    "**Méthode 2** (connexion via un service tiers/SSO) : connecté à ton Moodle dans le navigateur, "
-    "ouvre `<ton-moodle>/admin/tool/mobile/launch.php?service=moodle_mobile_app&passport=1"
-    "&urlscheme=moodlemobile`. Le navigateur essaie d'ouvrir un lien `moodlemobile://token=…` : "
-    "copie ce lien en entier (clic droit sur la page d'erreur / barre d'adresse) et colle-le dans "
+    "**Méthode 1** : *Préférences → Sécurité → Clés de sécurité* (`/user/managetoken.php`). "
+    "Si tu y vois une clé « Moodle mobile web service », copie-la. Si tu n'as que la clé *RSS*, "
+    "elle ne marche pas : passe à la méthode 2.\n"
+    "**Méthode 2** (marche aussi avec une connexion SSO) : connecté à ton Moodle, ouvre "
+    "`https://<ton-moodle>/admin/tool/mobile/launch.php?service=moodle_mobile_app&passport=1"
+    "&urlscheme=moodlemobile`. Avant, ouvre les outils du navigateur (F12 → onglet *Réseau*, coche "
+    "*Conserver le journal*). Clique sur la requête `launch.php` → *En-têtes de réponse* → "
+    "copie la valeur de `Location` (elle commence par `moodlemobile://token=`) et colle-la dans "
     "/config.\n"
     "Le token donne accès à ton compte : ne le partage qu'avec ce bot, et supprime-le avec /stop.")
 

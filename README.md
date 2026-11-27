@@ -34,7 +34,8 @@ Chaque utilisateur configure son propre compte, il n'y a pas de limite au nombre
 Le bot n'a jamais besoin de ton mot de passe : il utilise un **token Moodle**, ce qui marche aussi
 quand on se connecte à Moodle via un service tiers (SSO, CAS, Microsoft…).
 
-- `/aide` explique comment récupérer ton token.
+- `/aide` explique comment récupérer ton token (si la page « Clés de sécurité » n'affiche que la
+  clé RSS, utilise la méthode du lien `launch.php` décrite dans `/aide`).
 - `/config` ouvre un formulaire privé (URL de ton Moodle + token). Le token est vérifié puis
   enregistré, et **le salon où la commande est lancée devient ton salon d'alertes** (relancer
   `/config` ailleurs le change).
