@@ -28,36 +28,40 @@ time_limit, status` (`upcoming` / `open` / `closed`). Docs interactives : `/docs
 
 `pytest` (Moodle simulé, aucun accès réseau).
 
-## Bot Discord (multi-utilisateurs)
+## Bot Discord (multi-serveurs)
 
-Chaque utilisateur configure son propre compte, il n'y a pas de limite au nombre d'utilisateurs.
-Le bot n'a jamais besoin de ton mot de passe : il utilise un **token Moodle**, ce qui marche aussi
-quand on se connecte à Moodle via un service tiers (SSO, CAS, Microsoft…).
+Le bot peut être invité sur autant de serveurs que tu veux. Sur chaque serveur, **un administrateur**
+le configure une fois pour tout le monde. Il utilise un **token Moodle** (jamais de mot de passe),
+ce qui marche aussi avec une connexion via un service tiers (SSO, CAS, Microsoft…).
 
-- `/aide` explique comment récupérer ton token (si la page « Clés de sécurité » n'affiche que la
-  clé RSS, utilise la méthode du lien `launch.php` décrite dans `/aide`).
-- `/config` ouvre un formulaire privé (URL de ton Moodle + token). Le token est vérifié puis
-  enregistré, et **le salon où la commande est lancée devient ton salon d'alertes** (relancer
-  `/config` ailleurs le change).
-- `/notif` donne (ou retire) le rôle **notif qcm** à celui qui la lance. Le bot crée ce rôle sur
-  chaque serveur et le mentionne à chaque ouverture de QCM (sans le rôle sur le serveur, il
-  mentionne directement la personne qui a fait `/config`). Il lui faut la permission « Gérer
-  les rôles ».
-- `/stop` supprime ton token et arrête les alertes.
+- `/config` *(admin)* : formulaire privé (URL du Moodle + token). Le compte lié sert à tout le
+  serveur, et **le salon où la commande est lancée devient le salon d'alertes**.
+- `/notif` : donne (ou retire) le rôle **notif qcm** à celui qui la lance. Le bot crée ce rôle et
+  le mentionne à chaque ouverture de QCM. Il lui faut la permission « Gérer les rôles », et son
+  rôle doit être au-dessus de `notif qcm`.
+- `/aide` : comment récupérer le token (si « Clés de sécurité » n'affiche que la clé RSS,
+  utilise la méthode du lien `launch.php`).
+- `/stop` *(admin)* : supprime la configuration et le token du serveur. Retirer le bot du serveur
+  les supprime aussi.
 
-Toutes les `POLL_MINUTES` (10 par défaut), le bot vérifie le Moodle de chacun. Pour chaque QCM
-**noté et présent dans le calendrier**, il poste, en mentionnant le rôle `notif qcm`, un embed (nom, matière,
-fermeture) avec un bouton « Résoudre le QCM » **au moment où le QCM s'ouvre** (au plus
-`POLL_MINUTES` après l'heure d'ouverture). Les QCM déjà ouverts quand tu te connectes, ou
-découverts bien après leur ouverture, ne déclenchent pas d'alerte. Si le token cesse de
-fonctionner, les alertes sont suspendues et le bot te le dit dans ton salon.
+### Fonctionnement
+- **Une fois par jour** (`SYNC_HOURS`, et à chaque démarrage / `/config`), le bot récupère sur
+  Moodle les QCM **notés présents dans le calendrier** qui ne sont **pas encore ouverts** et les
+  mémorise avec leur heure d'ouverture.
+- **Chaque minute**, il regarde le stockage local : dès qu'un QCM atteint son heure d'ouverture, il
+  poste dans le salon un embed (nom, matière, fermeture) avec un bouton « Résoudre le QCM » et
+  mentionne le rôle, puis **supprime le QCM du stockage**.
+- Limite : un QCM ajouté au calendrier *après* la récupération du jour et ouvrant avant la
+  suivante n'est pas annoncé. Les QCM déjà ouverts ne sont jamais annoncés.
+- Si le token cesse de fonctionner, la récupération est suspendue et le bot le dit dans le
+  salon en mentionnant l'administrateur qui a fait `/config`.
 
 ### Installation
-1. Crée une application + un bot sur le portail développeur Discord, invite-le avec le scope
-   `bot` + `applications.commands` et le droit d'écrire dans les salons concernés.
+1. Crée une application + un bot sur le portail développeur Discord, invite-le avec les scopes
+   `bot` + `applications.commands` et les permissions : voir/écrire dans le salon, gérer les rôles.
 2. `cp .env.example .env`, renseigne `DISCORD_TOKEN` et `ENCRYPTION_KEY`.
    (`MOODLE_URL` est facultatif : il pré-remplit l'URL dans `/config`.)
 3. `python main.py`
 
 Les tokens sont chiffrés (Fernet) dans `qcm.db`. **Sauvegarde `ENCRYPTION_KEY`** : sans elle, les
-tokens enregistrés sont illisibles et chacun devra refaire `/config`.
+tokens enregistrés sont illisibles et chaque admin devra refaire `/config`.

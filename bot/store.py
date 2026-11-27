@@ -1,4 +1,4 @@
-"""Stockage SQLite des utilisateurs (token Moodle chiffré, salon) et des QCM déjà traités."""
+"""Stockage SQLite : configuration par serveur (token chiffré, salon) et QCM à venir."""
 from __future__ import annotations
 
 import sqlite3
@@ -6,102 +6,98 @@ from dataclasses import dataclass
 
 from cryptography.fernet import Fernet
 
+from app.moodle import Quiz
+
 
 @dataclass
-class User:
+class Guild:
     id: int
     channel_id: int
+    admin_id: int  # administrateur qui a lancé /config
     moodle_url: str
-    account: str  # identifiant Moodle lié au token (affichage / détection de changement)
+    account: str  # identifiant Moodle lié au token
     token: str
-    seeded: bool
 
 
 class Store:
     def __init__(self, path: str, key: str):
         self.fernet = Fernet(key.encode())
         self.db = sqlite3.connect(path)
-        cols = {r[1] for r in self.db.execute("PRAGMA table_info(users)")}
-        if cols and "token" not in cols:
-            # Ancienne version (mots de passe) : on supprime tout, chacun refait /config.
-            self.db.executescript("DROP TABLE users; DELETE FROM notified;"
-                                  if self._has("notified") else "DROP TABLE users;")
+        if self.db.execute("SELECT 1 FROM sqlite_master WHERE name='users'").fetchone():
+            # Ancienne version (configuration par utilisateur) : on repart de zéro.
+            self.db.executescript("DROP TABLE users; DROP TABLE IF EXISTS notified;"
+                                  " DROP TABLE IF EXISTS upcoming;")
         self.db.executescript("""
-            CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY, channel_id INTEGER NOT NULL,
+            CREATE TABLE IF NOT EXISTS guilds (
+                id INTEGER PRIMARY KEY, channel_id INTEGER NOT NULL, admin_id INTEGER NOT NULL,
                 moodle_url TEXT NOT NULL, account TEXT NOT NULL, token BLOB NOT NULL,
-                seeded INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1);
-            CREATE TABLE IF NOT EXISTS notified (
-                user_id INTEGER NOT NULL, quiz_id INTEGER NOT NULL,
-                PRIMARY KEY (user_id, quiz_id));
-            CREATE TABLE IF NOT EXISTS upcoming (
-                user_id INTEGER NOT NULL, quiz_id INTEGER NOT NULL,
-                PRIMARY KEY (user_id, quiz_id));
+                active INTEGER NOT NULL DEFAULT 1);
+            CREATE TABLE IF NOT EXISTS quizzes (
+                guild_id INTEGER NOT NULL, quiz_id INTEGER NOT NULL, course_id INTEGER NOT NULL,
+                course_name TEXT NOT NULL, name TEXT NOT NULL, url TEXT NOT NULL,
+                time_open INTEGER NOT NULL, time_close INTEGER NOT NULL,
+                time_limit INTEGER NOT NULL, PRIMARY KEY (guild_id, quiz_id));
         """)
 
-    def _has(self, table: str) -> bool:
-        return bool(self.db.execute("SELECT 1 FROM sqlite_master WHERE name=?", (table,)).fetchone())
-
-    def _clear(self, user_id: int) -> None:
-        self.db.execute("DELETE FROM notified WHERE user_id=?", (user_id,))
-        self.db.execute("DELETE FROM upcoming WHERE user_id=?", (user_id,))
-
-    def upsert_user(self, user_id: int, channel_id: int, moodle_url: str,
-                    account: str, token: str) -> None:
-        """Enregistre (ou met à jour) un utilisateur. Si le compte ou le Moodle change,
-        l'historique est effacé et le premier passage ne notifie rien."""
-        old = self.db.execute("SELECT moodle_url, account FROM users WHERE id=?",
-                              (user_id,)).fetchone()
-        enc = self.fernet.encrypt(token.encode())
-        if old and old == (moodle_url, account):
-            self.db.execute("UPDATE users SET channel_id=?, token=?, active=1 WHERE id=?",
-                            (channel_id, enc, user_id))
-        else:
-            self._clear(user_id)
-            self.db.execute(
-                "INSERT OR REPLACE INTO users"
-                " (id, channel_id, moodle_url, account, token, seeded, active)"
-                " VALUES (?,?,?,?,?,0,1)", (user_id, channel_id, moodle_url, account, enc))
+    # --- serveurs ---
+    def upsert_guild(self, guild_id: int, channel_id: int, admin_id: int,
+                     moodle_url: str, account: str, token: str) -> None:
+        """Enregistre la configuration d'un serveur. Si le compte ou le Moodle change,
+        les QCM mémorisés sont effacés."""
+        old = self.db.execute("SELECT moodle_url, account FROM guilds WHERE id=?",
+                              (guild_id,)).fetchone()
+        if old != (moodle_url, account):
+            self.db.execute("DELETE FROM quizzes WHERE guild_id=?", (guild_id,))
+        self.db.execute("INSERT OR REPLACE INTO guilds VALUES (?,?,?,?,?,?,1)",
+                        (guild_id, channel_id, admin_id, moodle_url, account,
+                         self.fernet.encrypt(token.encode())))
         self.db.commit()
 
-    def active_users(self) -> list[User]:
-        rows = self.db.execute(
-            "SELECT id, channel_id, moodle_url, account, token, seeded"
-            " FROM users WHERE active=1").fetchall()
-        return [User(r[0], r[1], r[2], r[3], self.fernet.decrypt(r[4]).decode(), bool(r[5]))
-                for r in rows]
+    def _guild(self, row) -> Guild | None:
+        return Guild(row[0], row[1], row[2], row[3], row[4],
+                     self.fernet.decrypt(row[5]).decode()) if row else None
 
-    def delete_user(self, user_id: int) -> bool:
-        self._clear(user_id)
-        n = self.db.execute("DELETE FROM users WHERE id=?", (user_id,)).rowcount
+    _COLS = "id, channel_id, admin_id, moodle_url, account, token"
+
+    def get_guild(self, guild_id: int) -> Guild | None:
+        return self._guild(self.db.execute(
+            f"SELECT {self._COLS} FROM guilds WHERE id=?", (guild_id,)).fetchone())
+
+    def active_guilds(self) -> list[Guild]:
+        return [self._guild(r) for r in self.db.execute(
+            f"SELECT {self._COLS} FROM guilds WHERE active=1")]
+
+    def deactivate(self, guild_id: int) -> None:
+        self.db.execute("UPDATE guilds SET active=0 WHERE id=?", (guild_id,))
+        self.db.commit()
+
+    def delete_guild(self, guild_id: int) -> bool:
+        self.db.execute("DELETE FROM quizzes WHERE guild_id=?", (guild_id,))
+        n = self.db.execute("DELETE FROM guilds WHERE id=?", (guild_id,)).rowcount
         self.db.commit()
         return n > 0
 
-    def deactivate(self, user_id: int) -> None:
-        self.db.execute("UPDATE users SET active=0 WHERE id=?", (user_id,))
+    # --- QCM à venir ---
+    def replace_quizzes(self, guild_id: int, quizzes: list[Quiz]) -> None:
+        """Remplace les QCM mémorisés d'un serveur par la liste donnée."""
+        self.db.execute("DELETE FROM quizzes WHERE guild_id=?", (guild_id,))
+        self.db.executemany(
+            "INSERT INTO quizzes VALUES (?,?,?,?,?,?,?,?,?)",
+            [(guild_id, q.id, q.course_id, q.course_name, q.name, q.url,
+              q.time_open, q.time_close, q.time_limit) for q in quizzes])
         self.db.commit()
 
-    def _ids(self, table: str, user_id: int) -> set[int]:
-        return {r[0] for r in self.db.execute(
-            f"SELECT quiz_id FROM {table} WHERE user_id=?", (user_id,))}
+    def count_quizzes(self, guild_id: int) -> int:
+        return self.db.execute("SELECT COUNT(*) FROM quizzes WHERE guild_id=?",
+                               (guild_id,)).fetchone()[0]
 
-    def _add(self, table: str, user_id: int, quiz_ids) -> None:
-        self.db.executemany(f"INSERT OR IGNORE INTO {table} VALUES (?,?)",
-                            [(user_id, i) for i in quiz_ids])
-        self.db.commit()
+    def due(self, now: float) -> list[tuple[int, Quiz]]:
+        """QCM dont l'heure d'ouverture est atteinte."""
+        rows = self.db.execute(
+            "SELECT guild_id, quiz_id, course_id, course_name, name, url, time_open,"
+            " time_close, time_limit FROM quizzes WHERE time_open <= ? ORDER BY time_open", (now,))
+        return [(r[0], Quiz(*r[1:])) for r in rows]
 
-    def notified(self, user_id: int) -> set[int]:
-        return self._ids("notified", user_id)
-
-    def mark_notified(self, user_id: int, quiz_ids) -> None:
-        self._add("notified", user_id, quiz_ids)
-
-    def upcoming(self, user_id: int) -> set[int]:
-        return self._ids("upcoming", user_id)
-
-    def track_upcoming(self, user_id: int, quiz_ids) -> None:
-        self._add("upcoming", user_id, quiz_ids)
-
-    def mark_seeded(self, user_id: int) -> None:
-        self.db.execute("UPDATE users SET seeded=1 WHERE id=?", (user_id,))
+    def delete_quiz(self, guild_id: int, quiz_id: int) -> None:
+        self.db.execute("DELETE FROM quizzes WHERE guild_id=? AND quiz_id=?", (guild_id, quiz_id))
         self.db.commit()

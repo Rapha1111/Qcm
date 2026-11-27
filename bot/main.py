@@ -1,24 +1,21 @@
-"""Bot Discord multi-utilisateurs : chaque utilisateur configure ses identifiants Moodle avec
-/config ; le bot scrute Moodle toutes les N minutes et poste les nouveaux QCM dans le salon
-où /config a été lancé."""
+"""Bot Discord multi-serveurs : un administrateur lie un compte Moodle à son serveur avec
+/config. Chaque jour, le bot mémorise les QCM à venir ; à l'heure d'ouverture, il poste le message
+dans le salon configuré en mentionnant le rôle « notif qcm », puis oublie le QCM."""
 from __future__ import annotations
 
 import asyncio
 import logging
+import time
 
 import discord
 from discord import app_commands
 from discord.ext import tasks
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-import time
-
 from app.moodle import MoodleAuthError, MoodleClient, Quiz, parse_token
-
 from app.urlcheck import ensure_public_host, normalize_moodle_url
 
-from .notifier import pick_new, seed
-from .store import Store, User
+from .store import Guild, Store
 
 log = logging.getLogger("qcm-bot")
 
@@ -31,7 +28,7 @@ class BotSettings(BaseSettings):
     moodle_service: str = "moodle_mobile_app"
     discord_token: str
     encryption_key: str  # clé Fernet : voir README
-    poll_minutes: int = 10
+    sync_hours: int = 24  # fréquence de récupération des QCM à venir sur Moodle
     db_file: str = "qcm.db"
     max_parallel: int = 5  # connexions simultanées à Moodle
 
@@ -84,18 +81,27 @@ class ConfigModal(discord.ui.Modal, title="Connexion à Moodle"):
                 "❌ Impossible de joindre Moodle à cette adresse (URL incorrecte, services web "
                 "désactivés ou site indisponible).", ephemeral=True)
             return
-        self.bot.store.upsert_user(interaction.user.id, interaction.channel_id, url,
-                                   info.get("username", str(info.get("userid"))), token)
+        gid = interaction.guild_id
+        self.bot.store.upsert_guild(gid, interaction.channel_id, interaction.user.id, url,
+                                    info.get("username", str(info.get("userid"))), token)
+        try:
+            await self.bot.ensure_role(interaction.guild)
+        except discord.HTTPException:
+            log.warning("Rôle non créé sur %s", gid)
+        count = await self.bot.sync_guild(self.bot.store.get_guild(gid))
+        extra = ("" if count is None else
+                 f" {count} QCM à venir mémorisé(s).")
         await interaction.followup.send(
-            f"✅ Connecté en tant que **{info.get('fullname', '?')}**. Tes QCM seront annoncés "
-            "dans ce salon dès qu'ils s'ouvrent.", ephemeral=True)
+            f"✅ Connecté en tant que **{info.get('fullname', '?')}**. Les QCM seront annoncés "
+            f"dans ce salon, avec le rôle **{ROLE_NAME}** (`/notif` pour le recevoir).{extra}",
+            ephemeral=True)
 
     async def on_error(self, interaction: discord.Interaction, error: Exception) -> None:
         log.exception("Erreur dans le formulaire /config", exc_info=error)
 
 
 HELP = (
-    "**Récupérer ton token Moodle**\n"
+    "**Récupérer le token Moodle** (réservé aux administrateurs du serveur : le compte lié sert à tout le monde)\n"
     "**Méthode 1** : *Préférences → Sécurité → Clés de sécurité* (`/user/managetoken.php`). "
     "Si tu y vois une clé « Moodle mobile web service », copie-la. Si tu n'as que la clé *RSS*, "
     "elle ne marche pas : passe à la méthode 2.\n"
@@ -105,7 +111,7 @@ HELP = (
     "*Conserver le journal*). Clique sur la requête `launch.php` → *En-têtes de réponse* → "
     "copie la valeur de `Location` (elle commence par `moodlemobile://token=`) et colle-la dans "
     "/config.\n"
-    "Le token donne accès à ton compte : ne le partage qu'avec ce bot, et supprime-le avec /stop.")
+    "Le token donne accès à ton compte : ne le partage qu'avec ce bot ; un administrateur peut le supprimer avec /stop.")
 
 
 class QcmBot(discord.Client):
@@ -116,10 +122,19 @@ class QcmBot(discord.Client):
         self.store = Store(cfg.db_file, cfg.encryption_key)
         self.tree = app_commands.CommandTree(self)
         self.sem = asyncio.Semaphore(cfg.max_parallel)
-        self.poll.change_interval(minutes=cfg.poll_minutes)
+        self.sync_all.change_interval(hours=cfg.sync_hours)
 
-        @self.tree.command(name="config", description="Connecte ton compte Moodle et choisis ce salon pour les alertes")
+        def is_admin(i: discord.Interaction) -> bool:
+            return i.guild is not None and i.user.guild_permissions.administrator
+
+        @self.tree.command(name="config", description="(Admin) Lie un compte Moodle à ce serveur et choisis ce salon pour les alertes")
+        @app_commands.guild_only()
+        @app_commands.default_permissions(administrator=True)
         async def config(interaction: discord.Interaction):
+            if not is_admin(interaction):
+                await interaction.response.send_message(
+                    "❌ Réservé aux administrateurs du serveur.", ephemeral=True)
+                return
             await interaction.response.send_modal(ConfigModal(self))
 
         @self.tree.command(name="notif", description="Active ou désactive les mentions pour les nouveaux QCM")
@@ -139,22 +154,24 @@ class QcmBot(discord.Client):
                        "placé au-dessus de « %s » dans la liste des rôles du serveur)." % ROLE_NAME)
             await interaction.response.send_message(msg, ephemeral=True)
 
-        @self.tree.command(name="aide", description="Comment récupérer ton token Moodle")
+        @self.tree.command(name="aide", description="Comment récupérer le token Moodle")
         async def aide(interaction: discord.Interaction):
             await interaction.response.send_message(HELP, ephemeral=True)
 
-        @self.tree.command(name="stop", description="Supprime ton token et arrête les alertes")
+        @self.tree.command(name="stop", description="(Admin) Supprime le token Moodle de ce serveur et arrête les alertes")
+        @app_commands.guild_only()
+        @app_commands.default_permissions(administrator=True)
         async def stop(interaction: discord.Interaction):
-            ok = self.store.delete_user(interaction.user.id)
+            if not is_admin(interaction):
+                await interaction.response.send_message(
+                    "❌ Réservé aux administrateurs du serveur.", ephemeral=True)
+                return
+            ok = self.store.delete_guild(interaction.guild_id)
             await interaction.response.send_message(
-                "🗑️ Tes données ont été supprimées." if ok else "Tu n'es pas configuré.",
+                "🗑️ Configuration supprimée." if ok else "Ce serveur n'est pas configuré.",
                 ephemeral=True)
 
-    def client_for(self, url: str) -> MoodleClient:
-        if url not in self.clients:
-            self.clients[url] = MoodleClient(url, self.cfg.moodle_service)
-        return self.clients[url]
-
+    # --- rôle ---
     async def ensure_role(self, guild: discord.Guild) -> discord.Role:
         """Renvoie le rôle de notification du serveur, en le créant s'il n'existe pas."""
         role = discord.utils.get(guild.roles, name=ROLE_NAME)
@@ -165,6 +182,8 @@ class QcmBot(discord.Client):
 
     async def _ensure_all_roles(self) -> None:
         for guild in self.guilds:
+            if self.store.get_guild(guild.id) is None:
+                continue  # serveur non configuré : on ne touche à rien
             try:
                 await self.ensure_role(guild)
             except discord.HTTPException:
@@ -174,66 +193,79 @@ class QcmBot(discord.Client):
     async def on_ready(self) -> None:
         await self._ensure_all_roles()
 
-    async def on_guild_join(self, guild: discord.Guild) -> None:
-        await self._ensure_all_roles()
+    async def on_guild_remove(self, guild: discord.Guild) -> None:
+        self.store.delete_guild(guild.id)  # le bot a été retiré : on supprime le token
 
     async def setup_hook(self) -> None:
         await self.tree.sync()
-        self.poll.start()
+        self.sync_all.start()
+        self.announce.start()
 
-    async def _process(self, user: User) -> None:
-        moodle = self.client_for(user.moodle_url or self.cfg.moodle_url)
+    def client_for(self, url: str) -> MoodleClient:
+        if url not in self.clients:
+            self.clients[url] = MoodleClient(url, self.cfg.moodle_service)
+        return self.clients[url]
+
+    # --- envoi ---
+    async def _send(self, channel_id: int, ping_role: bool = False, **kwargs) -> bool:
         try:
-            async with self.sem:
-                quizzes = await asyncio.to_thread(moodle.get_quizzes, user.token)
-        except MoodleAuthError:
-            self.store.deactivate(user.id)
-            await self._send(user, content=f"<@{user.id}> ⚠️ Ton token Moodle n'est plus valide, "
-                             "les alertes sont suspendues. Relance /config avec un nouveau token "
-                             "(voir /aide).")
-            return
-        except Exception:
-            log.exception("Échec Moodle pour l'utilisateur %s", user.id)
-            return
-
-        if not user.seeded:  # premier passage : on mémorise l'existant sans notifier
-            seen, upcoming = seed(quizzes)
-            self.store.mark_notified(user.id, seen)
-            self.store.track_upcoming(user.id, upcoming)
-            self.store.mark_seeded(user.id)
-            return
-        window = 2 * self.cfg.poll_minutes * 60 + 60
-        plan = pick_new(quizzes, self.store.notified(user.id), self.store.upcoming(user.id),
-                        time.time(), window)
-        self.store.mark_notified(user.id, plan.skip)
-        self.store.track_upcoming(user.id, plan.track)
-        for q in plan.send:
-            embed, view = build_message(q)
-            if not await self._send(user, ping=True, embed=embed, view=view):
-                break  # salon inaccessible : on réessaiera au prochain cycle
-            self.store.mark_notified(user.id, [q.id])
-            log.info("QCM %s notifié à %s", q.id, user.id)
-
-    async def _send(self, user: User, **kwargs) -> bool:
-        try:
-            channel = self.get_channel(user.channel_id) or await self.fetch_channel(user.channel_id)
-            if kwargs.pop("ping", False):  # mention du rôle s'il existe, sinon de l'utilisateur
-                guild = getattr(channel, "guild", None)
-                role = discord.utils.get(guild.roles, name=ROLE_NAME) if guild else None
-                kwargs["content"] = role.mention if role else f"<@{user.id}>"
+            channel = self.get_channel(channel_id) or await self.fetch_channel(channel_id)
+            if ping_role:
+                role = discord.utils.get(channel.guild.roles, name=ROLE_NAME)
+                if role:
+                    kwargs["content"] = role.mention
             await channel.send(**kwargs)
             return True
         except (discord.Forbidden, discord.NotFound):
-            log.warning("Salon %s inaccessible pour l'utilisateur %s", user.channel_id, user.id)
+            log.warning("Salon %s inaccessible", channel_id)
         except discord.HTTPException:
             log.exception("Envoi Discord échoué")
         return False
 
-    @tasks.loop(minutes=10)
-    async def poll(self) -> None:
-        await asyncio.gather(*(self._process(u) for u in self.store.active_users()))
+    # --- récupération quotidienne des QCM à venir ---
+    async def sync_guild(self, g: Guild) -> int | None:
+        """Mémorise les QCM pas encore ouverts du serveur. Renvoie leur nombre (None si échec)."""
+        moodle = self.client_for(g.moodle_url)
+        try:
+            async with self.sem:
+                quizzes = await asyncio.to_thread(moodle.get_quizzes, g.token)
+        except MoodleAuthError:
+            self.store.deactivate(g.id)
+            await self._send(g.channel_id, content=f"<@{g.admin_id}> ⚠️ Le token Moodle n'est "
+                             "plus valide, la récupération des QCM est suspendue. Relance /config "
+                             "avec un nouveau token (voir /aide).")
+            return None
+        except Exception:
+            log.exception("Échec Moodle pour le serveur %s", g.id)
+            return None
+        upcoming = [q for q in quizzes if q.status == "upcoming"]
+        self.store.replace_quizzes(g.id, upcoming)
+        log.info("Serveur %s : %d QCM à venir mémorisés", g.id, len(upcoming))
+        return len(upcoming)
 
-    @poll.before_loop
+    @tasks.loop(hours=24)
+    async def sync_all(self) -> None:
+        await asyncio.gather(*(self.sync_guild(g) for g in self.store.active_guilds()))
+
+    # --- envoi à l'heure d'ouverture ---
+    @tasks.loop(minutes=1)
+    async def announce(self) -> None:
+        now = time.time()
+        for guild_id, q in self.store.due(now):
+            if q.time_close and q.time_close < now:  # déjà fermé (bot arrêté longtemps)
+                self.store.delete_quiz(guild_id, q.id)
+                continue
+            g = self.store.get_guild(guild_id)
+            if g is None:
+                self.store.delete_quiz(guild_id, q.id)
+                continue
+            embed, view = build_message(q)
+            if await self._send(g.channel_id, ping_role=True, embed=embed, view=view):
+                self.store.delete_quiz(guild_id, q.id)
+                log.info("QCM %s annoncé sur le serveur %s", q.id, guild_id)
+
+    @sync_all.before_loop
+    @announce.before_loop
     async def _wait(self) -> None:
         await self.wait_until_ready()
 

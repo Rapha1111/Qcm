@@ -25,7 +25,7 @@ def fake_moodle(request: httpx.Request) -> httpx.Response:
             {"id": 13, "course": 1, "coursemodule": 57, "name": "Hors calendrier", "grade": 10}]})
     if fn == "core_calendar_get_action_events_by_timesort":
         return httpx.Response(200, json={"events": [
-            {"modulename": "quiz", "instance": 10}, {"modulename": "assign", "instance": 11}], "lastid": 2})
+            {"modulename": "quiz", "instance": 55}, {"modulename": "assign", "instance": 11}], "lastid": 2})
     return httpx.Response(404)
 
 

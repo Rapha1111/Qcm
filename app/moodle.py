@@ -111,7 +111,8 @@ class MoodleClient:
         return data
 
     def _calendar_quiz_ids(self, token: str) -> set[int]:
-        """IDs des QCM qui apparaissent dans le calendrier (événements d'ouverture/fermeture)."""
+        """IDs de module (`coursemodule`) des QCM présents dans le calendrier. Pour ces
+        événements, le champ `instance` est l'ID de module, pas l'ID du QCM."""
         since = int(time.time()) - 30 * 86400
         ids: set[int] = set()
         after = None
@@ -152,5 +153,5 @@ class MoodleClient:
                 time_limit=q.get("timelimit", 0),
             )
             for q in res.get("quizzes", [])
-            if q["id"] in in_calendar and q.get("grade", 0) > 0
+            if q["coursemodule"] in in_calendar and q.get("grade", 0) > 0
         ]
