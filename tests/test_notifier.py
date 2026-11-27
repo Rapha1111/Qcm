@@ -1,22 +1,38 @@
 import time
 
+from cryptography.fernet import Fernet
+
 from app.moodle import Quiz
-from bot.notifier import State, find_new
+from bot.notifier import pick_new
+from bot.store import Store
 
 
 def quiz(i, open_=0, close=0):
     return Quiz(i, 1, "Maths", f"Q{i}", "u", open_, close, 0)
 
 
-def test_flow(tmp_path):
+def test_pick_new():
     now = int(time.time())
-    p = tmp_path / "s.json"
-    s = State(p)
-    assert find_new([quiz(1)], s) == []  # 1er lancement : on amorce sans notifier
-    s = State(p)
-    soon = quiz(2, open_=now + 600)
-    closed = quiz(3, close=now - 10)
-    assert find_new([quiz(1), soon, closed, quiz(4)], s) == [quiz(4)]
-    soon.time_open = now - 1  # il vient de s'ouvrir
-    assert find_new([quiz(1), soon, closed, quiz(4)], State(p)) == [soon]
-    assert find_new([quiz(1), soon, closed, quiz(4)], State(p)) == []
+    qs = [quiz(1), quiz(2, open_=now + 600), quiz(3, close=now - 10), quiz(4)]
+    send, skip = pick_new(qs, {1})
+    assert [q.id for q in send] == [4]
+    assert skip == {3}  # le QCM 2 (à venir) reste à traiter à son ouverture
+
+
+def test_store_multi_user_and_encryption(tmp_path):
+    path, key = str(tmp_path / "t.db"), Fernet.generate_key().decode()
+    s = Store(path, key)
+    s.upsert_user(1, 100, "alice", "pw1")
+    s.upsert_user(2, 200, "bob", "pw2")
+    assert {(u.id, u.channel_id, u.password) for u in s.active_users()} == {(1, 100, "pw1"), (2, 200, "pw2")}
+    assert b"pw1" not in open(path, "rb").read()  # chiffré sur disque
+    s.mark_notified(1, [5])
+    s.upsert_user(1, 300, "alice", "new")  # même compte : historique conservé, salon mis à jour
+    assert s.notified(1) == {5} and s.notified(2) == set()
+    u = [u for u in s.active_users() if u.id == 1][0]
+    assert (u.channel_id, u.password) == (300, "new")
+    s.upsert_user(1, 300, "alice2", "x")  # autre compte : historique remis à zéro
+    assert s.notified(1) == set()
+    s.deactivate(2)
+    assert [u.id for u in s.active_users()] == [1]
+    assert s.delete_user(1) and not s.delete_user(1)

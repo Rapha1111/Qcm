@@ -28,15 +28,27 @@ time_limit, status` (`upcoming` / `open` / `closed`). Docs interactives : `/docs
 
 `pytest` (Moodle simulé, aucun accès réseau).
 
-## Bot Discord
+## Bot Discord (multi-utilisateurs)
 
-Le bot vérifie Moodle toutes les `POLL_MINUTES` (10 par défaut) et poste dans le salon
-`DISCORD_CHANNEL_ID` un embed (nom du QCM, matière, date de fermeture) avec un bouton
-« Résoudre le QCM » à chaque QCM **noté, présent dans le calendrier et ouvert** qu'il n'a pas
-encore signalé. Un QCM annoncé à l'avance est notifié au moment où il s'ouvre.
+Chaque utilisateur configure son propre compte, il n'y a pas de limite au nombre d'utilisateurs.
 
-1. Crée une application + un bot sur le portail développeur Discord, invite-le sur ton
-   serveur (droits : voir/envoyer des messages dans le salon).
-2. Remplis `.env` (voir `.env.example`), puis : `python -m bot.main`
+- `/config` ouvre un formulaire privé (identifiant + mot de passe Moodle). Les identifiants sont
+  vérifiés puis enregistrés, et **le salon où la commande est lancée devient ton salon d'alertes**
+  (relancer `/config` ailleurs le change).
+- `/stop` supprime tes identifiants et arrête les alertes.
 
-Au tout premier lancement, les QCM existants sont mémorisés (`state.json`) sans notification.
+Toutes les `POLL_MINUTES` (10 par défaut), le bot vérifie le Moodle de chacun et poste, en te
+mentionnant, un embed (nom du QCM, matière, fermeture) avec un bouton « Résoudre le QCM » pour
+chaque QCM **noté, présent dans le calendrier et ouvert** non encore signalé. Un QCM annoncé à
+l'avance est notifié à son ouverture. À la première configuration, les QCM existants sont
+mémorisés sans notification. Si les identifiants cessent de fonctionner, les alertes sont
+suspendues et le bot te le dit dans ton salon.
+
+### Installation
+1. Crée une application + un bot sur le portail développeur Discord, invite-le avec le scope
+   `bot` + `applications.commands` et le droit d'écrire dans les salons concernés.
+2. `cp .env.example .env`, renseigne `MOODLE_URL`, `DISCORD_TOKEN` et `ENCRYPTION_KEY`.
+3. `python -m bot.main`
+
+Les mots de passe sont chiffrés (Fernet) dans `qcm.db`. **Sauvegarde `ENCRYPTION_KEY`** : sans
+elle, les identifiants enregistrés sont illisibles et chacun devra refaire `/config`.
