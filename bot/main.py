@@ -11,7 +11,9 @@ from discord import app_commands
 from discord.ext import tasks
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from app.moodle import MoodleAuthError, MoodleClient, MoodleError, Quiz
+from app.moodle import MoodleAuthError, MoodleClient, Quiz
+
+from app.urlcheck import ensure_public_host, normalize_moodle_url
 
 from .notifier import pick_new
 from .store import Store, User
@@ -21,7 +23,7 @@ log = logging.getLogger("qcm-bot")
 
 class BotSettings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
-    moodle_url: str
+    moodle_url: str = ""  # URL proposée par défaut dans /config (facultatif)
     moodle_service: str = "moodle_mobile_app"
     discord_token: str
     encryption_key: str  # clé Fernet : voir README
@@ -47,29 +49,39 @@ def build_message(q: Quiz) -> tuple[discord.Embed, discord.ui.View]:
 
 
 class ConfigModal(discord.ui.Modal, title="Connexion à Moodle"):
+    url = discord.ui.TextInput(label="URL de ton Moodle", max_length=200,
+                               placeholder="https://moodle.monecole.fr")
     username = discord.ui.TextInput(label="Nom d'utilisateur Moodle", max_length=100)
     password = discord.ui.TextInput(label="Mot de passe Moodle", max_length=200)
 
     def __init__(self, bot: "QcmBot"):
         super().__init__()
         self.bot = bot
+        self.url.default = bot.cfg.moodle_url or None
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         await interaction.response.defer(ephemeral=True)
         username, password = self.username.value.strip(), self.password.value
         try:
-            await asyncio.to_thread(self.bot.moodle.login, username, password)
+            url = normalize_moodle_url(self.url.value)
+            await asyncio.to_thread(ensure_public_host, url)
+        except ValueError as e:
+            await interaction.followup.send(f"❌ URL refusée : {e}.", ephemeral=True)
+            return
+        try:
+            await asyncio.to_thread(self.bot.client_for(url).login, username, password)
         except MoodleAuthError:
             await interaction.followup.send("❌ Identifiants Moodle incorrects. "
                                             "Relance /config pour réessayer.", ephemeral=True)
             return
-        except (MoodleError, Exception):
+        except Exception:
             log.exception("Vérification des identifiants impossible")
-            await interaction.followup.send("❌ Moodle est injoignable pour le moment, "
-                                            "réessaie plus tard.", ephemeral=True)
+            await interaction.followup.send(
+                "❌ Impossible de joindre Moodle à cette adresse (URL incorrecte, services web "
+                "désactivés ou site indisponible).", ephemeral=True)
             return
         self.bot.store.upsert_user(interaction.user.id, interaction.channel_id,
-                                   username, password)
+                                   url, username, password)
         self.bot.tokens.pop(interaction.user.id, None)
         await interaction.followup.send(
             "✅ Configuration enregistrée. Tes QCM seront annoncés dans ce salon. "
@@ -83,7 +95,7 @@ class QcmBot(discord.Client):
     def __init__(self, cfg: BotSettings):
         super().__init__(intents=discord.Intents.default())
         self.cfg = cfg
-        self.moodle = MoodleClient(cfg.moodle_url, cfg.moodle_service)
+        self.clients: dict[str, MoodleClient] = {}
         self.store = Store(cfg.db_file, cfg.encryption_key)
         self.tokens: dict[int, str] = {}
         self.tree = app_commands.CommandTree(self)
@@ -102,6 +114,11 @@ class QcmBot(discord.Client):
                 "🗑️ Tes données ont été supprimées." if ok else "Tu n'es pas configuré.",
                 ephemeral=True)
 
+    def client_for(self, url: str) -> MoodleClient:
+        if url not in self.clients:
+            self.clients[url] = MoodleClient(url, self.cfg.moodle_service)
+        return self.clients[url]
+
     async def setup_hook(self) -> None:
         await self.tree.sync()
         self.poll.start()
@@ -109,10 +126,11 @@ class QcmBot(discord.Client):
     def _fetch(self, user: User) -> list[Quiz]:
         for attempt in (1, 2):
             try:
+                moodle = self.client_for(user.moodle_url or self.cfg.moodle_url)
                 token = self.tokens.get(user.id)
                 if not token:
-                    token = self.tokens[user.id] = self.moodle.login(user.username, user.password)
-                return self.moodle.get_quizzes(token)
+                    token = self.tokens[user.id] = moodle.login(user.username, user.password)
+                return moodle.get_quizzes(token)
             except MoodleAuthError:
                 self.tokens.pop(user.id, None)  # token expiré : une reconnexion, sinon échec
                 if attempt == 2:

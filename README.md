@@ -32,7 +32,7 @@ time_limit, status` (`upcoming` / `open` / `closed`). Docs interactives : `/docs
 
 Chaque utilisateur configure son propre compte, il n'y a pas de limite au nombre d'utilisateurs.
 
-- `/config` ouvre un formulaire privé (identifiant + mot de passe Moodle). Les identifiants sont
+- `/config` ouvre un formulaire privé (URL de ton Moodle, identifiant, mot de passe). Les identifiants sont
   vérifiés puis enregistrés, et **le salon où la commande est lancée devient ton salon d'alertes**
   (relancer `/config` ailleurs le change).
 - `/stop` supprime tes identifiants et arrête les alertes.
@@ -47,7 +47,8 @@ suspendues et le bot te le dit dans ton salon.
 ### Installation
 1. Crée une application + un bot sur le portail développeur Discord, invite-le avec le scope
    `bot` + `applications.commands` et le droit d'écrire dans les salons concernés.
-2. `cp .env.example .env`, renseigne `MOODLE_URL`, `DISCORD_TOKEN` et `ENCRYPTION_KEY`.
+2. `cp .env.example .env`, renseigne `DISCORD_TOKEN` et `ENCRYPTION_KEY`.
+   (`MOODLE_URL` est facultatif : il pré-remplit l'URL dans `/config`.)
 3. `python -m bot.main`
 
 Les mots de passe sont chiffrés (Fernet) dans `qcm.db`. **Sauvegarde `ENCRYPTION_KEY`** : sans
