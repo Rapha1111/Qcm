@@ -22,6 +22,8 @@ from .store import Store, User
 
 log = logging.getLogger("qcm-bot")
 
+ROLE_NAME = "notif qcm"
+
 
 class BotSettings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
@@ -120,6 +122,23 @@ class QcmBot(discord.Client):
         async def config(interaction: discord.Interaction):
             await interaction.response.send_modal(ConfigModal(self))
 
+        @self.tree.command(name="notif", description="Active ou désactive les mentions pour les nouveaux QCM")
+        @app_commands.guild_only()
+        async def notif(interaction: discord.Interaction):
+            member = interaction.user
+            try:
+                role = await self.ensure_role(interaction.guild)
+                if role in member.roles:
+                    await member.remove_roles(role, reason="/notif")
+                    msg = f"🔕 Le rôle **{ROLE_NAME}** t'a été retiré, tu ne seras plus mentionné."
+                else:
+                    await member.add_roles(role, reason="/notif")
+                    msg = f"🔔 Tu as le rôle **{ROLE_NAME}** : tu seras mentionné à chaque ouverture de QCM."
+            except discord.Forbidden:
+                msg = ("❌ Il me manque la permission « Gérer les rôles » (et mon rôle doit être "
+                       "placé au-dessus de « %s » dans la liste des rôles du serveur)." % ROLE_NAME)
+            await interaction.response.send_message(msg, ephemeral=True)
+
         @self.tree.command(name="aide", description="Comment récupérer ton token Moodle")
         async def aide(interaction: discord.Interaction):
             await interaction.response.send_message(HELP, ephemeral=True)
@@ -135,6 +154,28 @@ class QcmBot(discord.Client):
         if url not in self.clients:
             self.clients[url] = MoodleClient(url, self.cfg.moodle_service)
         return self.clients[url]
+
+    async def ensure_role(self, guild: discord.Guild) -> discord.Role:
+        """Renvoie le rôle de notification du serveur, en le créant s'il n'existe pas."""
+        role = discord.utils.get(guild.roles, name=ROLE_NAME)
+        if role is None:
+            role = await guild.create_role(name=ROLE_NAME, mentionable=True,
+                                           reason="Rôle de notification des QCM")
+        return role
+
+    async def _ensure_all_roles(self) -> None:
+        for guild in self.guilds:
+            try:
+                await self.ensure_role(guild)
+            except discord.HTTPException:
+                log.warning("Impossible de créer le rôle dans %s (permission « Gérer les rôles » ?)",
+                            guild.name)
+
+    async def on_ready(self) -> None:
+        await self._ensure_all_roles()
+
+    async def on_guild_join(self, guild: discord.Guild) -> None:
+        await self._ensure_all_roles()
 
     async def setup_hook(self) -> None:
         await self.tree.sync()
@@ -168,7 +209,7 @@ class QcmBot(discord.Client):
         self.store.track_upcoming(user.id, plan.track)
         for q in plan.send:
             embed, view = build_message(q)
-            if not await self._send(user, content=f"<@{user.id}>", embed=embed, view=view):
+            if not await self._send(user, ping=True, embed=embed, view=view):
                 break  # salon inaccessible : on réessaiera au prochain cycle
             self.store.mark_notified(user.id, [q.id])
             log.info("QCM %s notifié à %s", q.id, user.id)
@@ -176,6 +217,10 @@ class QcmBot(discord.Client):
     async def _send(self, user: User, **kwargs) -> bool:
         try:
             channel = self.get_channel(user.channel_id) or await self.fetch_channel(user.channel_id)
+            if kwargs.pop("ping", False):  # mention du rôle s'il existe, sinon de l'utilisateur
+                guild = getattr(channel, "guild", None)
+                role = discord.utils.get(guild.roles, name=ROLE_NAME) if guild else None
+                kwargs["content"] = role.mention if role else f"<@{user.id}>"
             await channel.send(**kwargs)
             return True
         except (discord.Forbidden, discord.NotFound):

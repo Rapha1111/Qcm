@@ -39,10 +39,14 @@ quand on se connecte à Moodle via un service tiers (SSO, CAS, Microsoft…).
 - `/config` ouvre un formulaire privé (URL de ton Moodle + token). Le token est vérifié puis
   enregistré, et **le salon où la commande est lancée devient ton salon d'alertes** (relancer
   `/config` ailleurs le change).
+- `/notif` donne (ou retire) le rôle **notif qcm** à celui qui la lance. Le bot crée ce rôle sur
+  chaque serveur et le mentionne à chaque ouverture de QCM (sans le rôle sur le serveur, il
+  mentionne directement la personne qui a fait `/config`). Il lui faut la permission « Gérer
+  les rôles ».
 - `/stop` supprime ton token et arrête les alertes.
 
 Toutes les `POLL_MINUTES` (10 par défaut), le bot vérifie le Moodle de chacun. Pour chaque QCM
-**noté et présent dans le calendrier**, il poste, en te mentionnant, un embed (nom, matière,
+**noté et présent dans le calendrier**, il poste, en mentionnant le rôle `notif qcm`, un embed (nom, matière,
 fermeture) avec un bouton « Résoudre le QCM » **au moment où le QCM s'ouvre** (au plus
 `POLL_MINUTES` après l'heure d'ouverture). Les QCM déjà ouverts quand tu te connectes, ou
 découverts bien après leur ouverture, ne déclenchent pas d'alerte. Si le token cesse de
