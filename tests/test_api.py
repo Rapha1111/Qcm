@@ -20,7 +20,12 @@ def fake_moodle(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json=[{"id": 1, "fullname": "Maths"}])
     if fn == "mod_quiz_get_quizzes_by_courses":
         return httpx.Response(200, json={"quizzes": [
-            {"id": 10, "course": 1, "coursemodule": 55, "name": "QCM 1", "timeopen": 0, "timeclose": 0, "timelimit": 600}]})
+            {"id": 10, "course": 1, "coursemodule": 55, "name": "QCM 1", "timeopen": 0, "timeclose": 0, "timelimit": 600, "grade": 20},
+            {"id": 12, "course": 1, "coursemodule": 56, "name": "Non noté", "grade": 0},
+            {"id": 13, "course": 1, "coursemodule": 57, "name": "Hors calendrier", "grade": 10}]})
+    if fn == "core_calendar_get_action_events_by_timesort":
+        return httpx.Response(200, json={"events": [
+            {"modulename": "quiz", "instance": 10}, {"modulename": "assign", "instance": 11}], "lastid": 2})
     return httpx.Response(404)
 
 
@@ -35,6 +40,7 @@ def test_login_and_quizzes():
     token = c.post("/login", json={"username": "u", "password": "ok"}).json()["token"]
     r = c.get("/quizzes", headers={"Authorization": f"Bearer {token}"})
     assert r.status_code == 200
+    assert len(r.json()) == 1  # non noté et hors calendrier exclus
     assert r.json()[0] == {
         "id": 10, "course_id": 1, "course_name": "Maths", "name": "QCM 1",
         "url": "https://m.test/mod/quiz/view.php?id=55", "time_open": 0,

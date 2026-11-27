@@ -90,11 +90,29 @@ class MoodleClient:
             raise MoodleError(msg, code)
         return data
 
+    def _calendar_quiz_ids(self, token: str) -> set[int]:
+        """IDs des QCM qui apparaissent dans le calendrier (événements d'ouverture/fermeture)."""
+        since = int(time.time()) - 30 * 86400
+        ids: set[int] = set()
+        after = None
+        while True:
+            params = {"timesortfrom": since, "limitnum": 50}
+            if after is not None:
+                params["aftereventid"] = after
+            res = self._call(token, "core_calendar_get_action_events_by_timesort", **params)
+            events = res.get("events", [])
+            ids.update(e["instance"] for e in events if e.get("modulename") == "quiz")
+            if len(events) < 50:
+                return ids
+            after = res["lastid"]
+
     def get_quizzes(self, token: str) -> list[Quiz]:
+        """QCM notés (note max > 0) présents dans le calendrier."""
         user_id = self._call(token, "core_webservice_get_site_info")["userid"]
         courses = self._call(token, "core_enrol_get_users_courses", userid=user_id)
         if not courses:
             return []
+        in_calendar = self._calendar_quiz_ids(token)
         names = {c["id"]: c["fullname"] for c in courses}
         params = {f"courseids[{i}]": c["id"] for i, c in enumerate(courses)}
         res = self._call(token, "mod_quiz_get_quizzes_by_courses", **params)
@@ -110,4 +128,5 @@ class MoodleClient:
                 time_limit=q.get("timelimit", 0),
             )
             for q in res.get("quizzes", [])
+            if q["id"] in in_calendar and q.get("grade", 0) > 0
         ]

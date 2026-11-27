@@ -27,3 +27,16 @@ time_limit, status` (`upcoming` / `open` / `closed`). Docs interactives : `/docs
 ## Tests
 
 `pytest` (Moodle simulé, aucun accès réseau).
+
+## Bot Discord
+
+Le bot vérifie Moodle toutes les `POLL_MINUTES` (10 par défaut) et poste dans le salon
+`DISCORD_CHANNEL_ID` un embed (nom du QCM, matière, date de fermeture) avec un bouton
+« Résoudre le QCM » à chaque QCM **noté, présent dans le calendrier et ouvert** qu'il n'a pas
+encore signalé. Un QCM annoncé à l'avance est notifié au moment où il s'ouvre.
+
+1. Crée une application + un bot sur le portail développeur Discord, invite-le sur ton
+   serveur (droits : voir/envoyer des messages dans le salon).
+2. Remplis `.env` (voir `.env.example`), puis : `python -m bot.main`
+
+Au tout premier lancement, les QCM existants sont mémorisés (`state.json`) sans notification.
