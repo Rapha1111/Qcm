@@ -53,7 +53,7 @@ fonctionner, les alertes sont suspendues et le bot te le dit dans ton salon.
    `bot` + `applications.commands` et le droit d'écrire dans les salons concernés.
 2. `cp .env.example .env`, renseigne `DISCORD_TOKEN` et `ENCRYPTION_KEY`.
    (`MOODLE_URL` est facultatif : il pré-remplit l'URL dans `/config`.)
-3. `python -m bot.main`
+3. `python main.py`
 
 Les tokens sont chiffrés (Fernet) dans `qcm.db`. **Sauvegarde `ENCRYPTION_KEY`** : sans elle, les
 tokens enregistrés sont illisibles et chacun devra refaire `/config`.
