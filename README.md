@@ -35,7 +35,8 @@ le configure une fois pour tout le monde. Il utilise un **token Moodle** (jamais
 ce qui marche aussi avec une connexion via un service tiers (SSO, CAS, Microsoft…).
 
 - `/config` *(admin)* : formulaire privé (URL du Moodle + token). Le compte lié sert à tout le
-  serveur, et **le salon où la commande est lancée devient le salon d'alertes**.
+  serveur, et **le salon où la commande est lancée devient le salon d'alertes**. Les QCM déjà
+  en cours sont aussitôt renvoyés dans ce salon (sans mention du rôle).
 - `/notif` : donne (ou retire) le rôle **notif qcm** à celui qui la lance. Le bot crée ce rôle et
   le mentionne à chaque ouverture de QCM. Il lui faut la permission « Gérer les rôles », et son
   rôle doit être au-dessus de `notif qcm`.

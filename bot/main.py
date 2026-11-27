@@ -33,8 +33,9 @@ class BotSettings(BaseSettings):
     max_parallel: int = 5  # connexions simultanées à Moodle
 
 
-def build_message(q: Quiz) -> tuple[discord.Embed, discord.ui.View]:
-    embed = discord.Embed(title=q.name, description="Ce QCM vient de s'ouvrir !", color=0x5865F2)
+def build_message(q: Quiz, ongoing: bool = False) -> tuple[discord.Embed, discord.ui.View]:
+    embed = discord.Embed(title=q.name, color=0x5865F2,
+                          description="QCM en cours" if ongoing else "Ce QCM vient de s'ouvrir !")
     embed.add_field(name="Matière", value=q.course_name or "—", inline=False)
     if q.time_close:
         close = f"<t:{q.time_close}:F> (<t:{q.time_close}:R>)"
@@ -88,13 +89,17 @@ class ConfigModal(discord.ui.Modal, title="Connexion à Moodle"):
             await self.bot.ensure_role(interaction.guild)
         except discord.HTTPException:
             log.warning("Rôle non créé sur %s", gid)
-        count = await self.bot.sync_guild(self.bot.store.get_guild(gid))
-        extra = ("" if count is None else
-                 f" {count} QCM à venir mémorisé(s).")
+        result = await self.bot.sync_guild(self.bot.store.get_guild(gid))
+        upcoming, ongoing = result if result else ([], [])
+        extra = (f" {len(upcoming)} QCM à venir mémorisé(s), {len(ongoing)} en cours."
+                 if result else "")
         await interaction.followup.send(
             f"✅ Connecté en tant que **{info.get('fullname', '?')}**. Les QCM seront annoncés "
             f"dans ce salon, avec le rôle **{ROLE_NAME}** (`/notif` pour le recevoir).{extra}",
             ephemeral=True)
+        for q in ongoing:  # QCM déjà ouverts : renvoyés dans le salon (sans mention du rôle)
+            embed, view = build_message(q, ongoing=True)
+            await self.bot._send(interaction.channel_id, embed=embed, view=view)
 
     async def on_error(self, interaction: discord.Interaction, error: Exception) -> None:
         log.exception("Erreur dans le formulaire /config", exc_info=error)
@@ -223,8 +228,9 @@ class QcmBot(discord.Client):
         return False
 
     # --- récupération quotidienne des QCM à venir ---
-    async def sync_guild(self, g: Guild) -> int | None:
-        """Mémorise les QCM pas encore ouverts du serveur. Renvoie leur nombre (None si échec)."""
+    async def sync_guild(self, g: Guild) -> tuple[list[Quiz], list[Quiz]] | None:
+        """Mémorise les QCM pas encore ouverts du serveur.
+        Renvoie (QCM à venir, QCM en cours), ou None en cas d'échec."""
         moodle = self.client_for(g.moodle_url)
         try:
             async with self.sem:
@@ -241,7 +247,7 @@ class QcmBot(discord.Client):
         upcoming = [q for q in quizzes if q.status == "upcoming"]
         self.store.replace_quizzes(g.id, upcoming)
         log.info("Serveur %s : %d QCM à venir mémorisés", g.id, len(upcoming))
-        return len(upcoming)
+        return upcoming, [q for q in quizzes if q.status == "open"]
 
     @tasks.loop(hours=24)
     async def sync_all(self) -> None:
